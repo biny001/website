@@ -1,0 +1,50 @@
+# Supply-chain gate
+#
+# Runs on every push and pull request. Reads the repository for the injected-loader pattern
+# seen in the Aug/Sep 2026 incidents (whitespace injector in Node-loaded configs, known markers,
+# detached-spawn + eval behaviour) and FAILS the check when anything is found.
+#
+# It never installs or builds anything, so it is safe on an infected commit.
+#
+# To make a failed gate actually stop a deploy:
+#   * Render:  service > Settings > Build & Deploy > Auto-Deploy = "After CI Checks Pass"
+#   * Vercel:  project > Settings > Git > require this check (or Deployment Protection),
+#              or gate with GitHub branch protection below
+#   * GitHub:  Settings > Branches > protect the production branch, require the status check
+#              "supply-chain-gate / scan", block force pushes and deletions
+#
+# Pinned action SHA on purpose (no floating tags): actions/checkout v4.2.2.
+
+name: supply-chain-gate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supply-chain-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (no install, no build)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Commit date sanity (rewritten-commit hint)
+        id: dates
+        run: |
+          echo "GATE_AUTHOR_TS=$(git log -1 --format=%at)" >> "$GITHUB_ENV"
+          echo "GATE_COMMITTER_TS=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
+      - name: Scan for injected loaders
+        run: python3 .github/scripts/supply_chain_gate.py .
